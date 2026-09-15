@@ -1,17 +1,14 @@
 name: Saudi Market Scanner
 
 on:
-  workflow_dispatch: # للتشغيل اليدوي
+  workflow_dispatch:
   schedule:
-    # 07:00 UTC = 10:00 AM بتوقيت السعودية
-    # 12:30 UTC = 15:30 PM بتوقيت السعودية (آخر فحص قبل 15:40)
-    # Days 0-4: الأحد إلى الخميس
-    - cron: '0,30 7-12 * * 0,1,2,3,4'
+    - cron: '0,30 * * * 0,1,2,3,4'
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
