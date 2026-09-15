@@ -3,8 +3,8 @@ import requests
 import pandas as pd
 import yfinance as yf
 
-BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
 
 
 # ============================================================
@@ -306,7 +306,7 @@ def scan_saudi_market():
         try:
             df_daily = yf.Ticker(ticker).history(period="3mo", interval="1d")
 
-            if df_daily.empty or len(df_daily) < 25:
+            if df_daily.empty or len(df_daily) < 25 or "Close" not in df_daily.columns or "Volume" not in df_daily.columns:
                 continue
 
             # Prices
