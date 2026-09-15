@@ -3,6 +3,7 @@ name: Saudi Market Scanner
 on:
   workflow_dispatch:
   schedule:
+    # يعمل كل 30 دقيقة طوال اليوم من الأحد إلى الخميس
     - cron: '0,30 * * * 0,1,2,3,4'
 
 jobs:
