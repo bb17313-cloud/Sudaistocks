@@ -1,4 +1,4 @@
-Name: Saudi Market Scanner
+name: Saudi Market Scanner
 
 on:
   workflow_dispatch:
