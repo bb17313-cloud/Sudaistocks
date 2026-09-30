@@ -6,13 +6,15 @@ import yfinance as yf
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
 
+MAX_SHOWN = 20  # أعلى 20 سهم حسب نسبة الارتفاع
+
 
 # ============================================================
 # Full Saudi Stocks Dictionary (222 Stocks)
 # ============================================================
 
 def get_saudi_stocks_dict():
-    """قائمة 222 سهمًا سعوديًا كاملة كما في الكود الأصلي"""
+    """قائمة الأسهم السعودية"""
     return {
         "2030": "المصافي",
         "2222": "أرامكو السعودية",
@@ -251,36 +253,55 @@ def send_telegram(text):
     payload = {
         "chat_id": CHAT_ID,
         "text": text,
-        "parse_mode": "Markdown",
+        "parse_mode": "HTML",
         "disable_web_page_preview": True
     }
 
     try:
         response = requests.post(url, data=payload, timeout=30)
-        if response.status_code == 200:
-            return True
-        print(f"❌ Telegram Error: {response.status_code} - {response.text}")
-        return False
+        return response.status_code == 200
     except Exception as e:
         print(f"❌ Telegram Exception: {e}")
         return False
 
 
 # ============================================================
-# Indicators
+# Power Trend Calculation (4H Frame)
 # ============================================================
 
-def calculate_rsi(series, period=14):
-    delta = series.diff()
-    gain = delta.clip(lower=0)
-    loss = -delta.clip(upper=0)
+def get_power_trend_4h_candles(ticker_obj):
+    """حساب عدد الشموع المتتالية لاتجاه Power Trend على إطار 4 ساعات"""
+    try:
+        # جلب بيانات 1 ساعة وتجميعها إلى 4 ساعات
+        df_1h = ticker_obj.history(period="60d", interval="1h")
+        if df_1h.empty or len(df_1h) < 30:
+            return 0
 
-    avg_gain = gain.ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
-    avg_loss = loss.ewm(alpha=1 / period, adjust=False, min_periods=period).mean()
+        df_4h = df_1h.resample('4h').agg({
+            'Open': 'first',
+            'High': 'max',
+            'Low': 'min',
+            'Close': 'last',
+            'Volume': 'sum'
+        }).dropna()
 
-    rs = avg_gain / avg_loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
+        if len(df_4h) < 21:
+            return 0
+
+        # حساب المتوسطات الأسية EMA9 و EMA21
+        df_4h["EMA9"] = df_4h["Close"].ewm(span=9, adjust=False).mean()
+        df_4h["EMA21"] = df_4h["Close"].ewm(span=21, adjust=False).mean()
+
+        # حساب عدد الشموع المتتالية من الأحدث التي يحافظ فيها السهم على EMA9 > EMA21
+        count = 0
+        for i in range(len(df_4h) - 1, -1, -1):
+            if df_4h["EMA9"].iloc[i] > df_4h["EMA21"].iloc[i]:
+                count += 1
+            else:
+                break
+        return count
+    except Exception:
+        return 0
 
 
 # ============================================================
@@ -296,90 +317,76 @@ def scan_saudi_market():
     results = []
 
     print("=" * 60)
-    print("🇸🇦 Saudi Market Scanner - L3-MBO Protocol")
+    print("🇸🇦 Saudi Market Scanner")
     print(f"🔎 Scanning {len(stocks_dict)} stocks...")
     print("=" * 60)
 
     for code, name in stocks_dict.items():
-        ticker = f"{code}.SR"
+        ticker_str = f"{code}.SR"
 
         try:
-            df_daily = yf.Ticker(ticker).history(period="3mo", interval="1d")
+            ticker_obj = yf.Ticker(ticker_str)
+            # جلب بيانات سنة كاملة لحساب القمة والقاع لـ 52 أسبوع
+            df_daily = ticker_obj.history(period="1y", interval="1d")
 
-            if df_daily.empty or len(df_daily) < 25 or "Close" not in df_daily.columns or "Volume" not in df_daily.columns:
+            if df_daily.empty or len(df_daily) < 10 or "Close" not in df_daily.columns or "Volume" not in df_daily.columns:
                 continue
 
-            # Prices
             latest_close = float(df_daily["Close"].iloc[-1])
             previous_close = float(df_daily["Close"].iloc[-2])
-
-            if pd.isna(latest_close) or latest_close <= 0:
-                continue
-
-            # Liquidity > 5M SAR
-            avg_vol_10 = df_daily["Volume"].tail(10).mean()
-            if pd.isna(avg_vol_10) or avg_vol_10 <= 0:
-                continue
-
-            val_avg_10 = latest_close * avg_vol_10
-            if val_avg_10 <= 5_000_000:
-                continue
-
-            # RVOL >= 1.1
             latest_volume = float(df_daily["Volume"].iloc[-1])
+
+            if pd.isna(latest_close) or latest_close <= 0 or previous_close <= 0:
+                continue
+
+            # --------------------------------------------------------
+            # الشروط المحدثة:
+            # --------------------------------------------------------
+
+            # 1. نسبة التغير يتجاوز 0.5%+ مقارنة بإغلاق اليوم السابق (فقرة 2)
+            change_pct = ((latest_close - previous_close) / previous_close) * 100
+            if change_pct < 0.5:
+                continue
+
+            # 2. حجم التداول الحالي أكبر من 30,000 سهم
+            if latest_volume <= 30_000:
+                continue
+
+            # 3. متوسط حجم التداول لـ 10 أيام أكبر من 100,000 سهم
+            avg_vol_10 = df_daily["Volume"].tail(10).mean()
+            if pd.isna(avg_vol_10) or avg_vol_10 <= 100_000:
+                continue
+
+            # 4. الحجم النسبي لـ 10 أيام أكبر من 1.2
             rvol = latest_volume / avg_vol_10
-            if pd.isna(rvol) or rvol < 1.1:
+            if pd.isna(rvol) or rvol <= 1.2:
                 continue
 
-            # 9-Day Range > 1%
-            last_9 = df_daily.tail(9)
-            highest_9 = float(last_9["High"].max())
-            lowest_9 = float(last_9["Low"].min())
+            # (السعر مفتوح - تم إلغاء شرط السعر < 50)
+            # (الأسهم الحرة مفتوح - تم إلغاء شرط Float < 500M)
 
-            if pd.isna(highest_9) or pd.isna(lowest_9) or lowest_9 <= 0:
-                continue
+            # --------------------------------------------------------
+            # حساب القمة والقاع لـ 52 أسبوعاً والقطاع
+            # --------------------------------------------------------
+            high_52 = float(df_daily["High"].max())
+            low_52 = float(df_daily["Low"].min())
 
-            range_9 = ((highest_9 - lowest_9) / lowest_9) * 100
-            if range_9 <= 1:
-                continue
+            # نسبة التغير مقارنة بقمة وقاع 52 أسبوع
+            high_52_pct = ((latest_close - high_52) / high_52) * 100
+            low_52_pct = ((latest_close - low_52) / low_52) * 100
 
-            # EMA 9 & EMA 21 Conditions
-            df_daily["EMA9"] = df_daily["Close"].ewm(span=9, adjust=False).mean()
-            df_daily["EMA21"] = df_daily["Close"].ewm(span=21, adjust=False).mean()
+            # القطاع والنشاط
+            sector_name = "غير محدد"
+            industry_name = "غير محدد"
+            try:
+                info = ticker_obj.info
+                sector_name = info.get("sector", "غير محدد")
+                industry_name = info.get("industry", "غير محدد")
+            except Exception:
+                pass
 
-            ema9_curr = float(df_daily["EMA9"].iloc[-1])
-            ema9_prev = float(df_daily["EMA9"].iloc[-2])
-            ema21_curr = float(df_daily["EMA21"].iloc[-1])
-
-            ema_bullish = ema9_curr > ema21_curr
-            ema9_rising = ema9_curr > ema9_prev
-            price_above_ema9 = latest_close > ema9_curr
-            price_cross_ema9 = (previous_close <= ema9_prev) and (latest_close > ema9_curr)
-
-            if not (ema_bullish and ema9_rising and (price_above_ema9 or price_cross_ema9)):
-                continue
-
-            # RSI > 50
-            df_daily["RSI14"] = calculate_rsi(df_daily["Close"], period=14)
-            rsi_curr = float(df_daily["RSI14"].iloc[-1])
-
-            if pd.isna(rsi_curr) or rsi_curr <= 50:
-                continue
-
-            # Calculations for Levels
-            support_level = ema9_curr
-            strong_support = ema21_curr
-            breakout_level = highest_9
-
-            target_1 = latest_close * 1.02
-            target_2 = latest_close * 1.04
-            target_3 = latest_close * 1.06
-            target_4 = latest_close * 1.08
-            max_target = latest_close * 1.12
-
-            sl_primary = support_level * 0.99
-            sl_secondary = strong_support
-            sl_bloody = lowest_9
+            # حساب Power Trend 4h
+            power_candles = get_power_trend_4h_candles(ticker_obj)
 
             tv_link = f"https://www.tradingview.com/chart/?symbol=TADAWUL:{code}"
 
@@ -387,68 +394,51 @@ def scan_saudi_market():
                 "code": code,
                 "name": name,
                 "price": latest_close,
-                "rvol": rvol,
-                "rsi": rsi_curr,
-                "tv_link": tv_link,
-                "support": support_level,
-                "strong_support": strong_support,
-                "breakout": breakout_level,
-                "t1": target_1,
-                "t2": target_2,
-                "t3": target_3,
-                "t4": target_4,
-                "max_target": max_target,
-                "sl1": sl_primary,
-                "sl2": sl_secondary,
-                "sl3": sl_bloody
+                "sector": sector_name,
+                "industry": industry_name,
+                "change_pct": change_pct,
+                "high_52_pct": high_52_pct,
+                "low_52_pct": low_52_pct,
+                "power_candles": power_candles,
+                "tv_link": tv_link
             })
 
-            print(f"✅ PASS: {code} - {name} | Price={latest_close:.2f} | RVOL={rvol:.2f}")
+            print(f"✅ PASS: {code} - {name} | Price={latest_close:.2f} | Change={change_pct:+.2f}%")
 
         except Exception as e:
             print(f"❌ Error {code}: {e}")
             continue
 
-    # Send Results
+    # --------------------------------------------------------
+    # الترتيب وإرسال النتائج المطلوبة
+    # --------------------------------------------------------
     if not results:
-        send_telegram("🇸🇦 *Saudi Market Scanner*\n\n❌ لا توجد أسهم تطابق جميع الشروط الفنية حالياً.")
+        send_telegram("🇸🇦 <b>سكنر السوق السعودي</b>\n\n❌ لا توجد أسهم تطابق الشروط حالياً.")
         print("No stocks passed.")
         return
 
-    results.sort(key=lambda x: x["rvol"], reverse=True)
+    # الترتيب حسب أعلى نسبة تغير
+    results.sort(key=lambda x: x["change_pct"], reverse=True)
+    results = results[:MAX_SHOWN]
 
+    # إرسال الرسائل بالتنسيق المحدد
     for stock in results:
-        msg = f"""⚡️ *تنبيه سكنر L3-MBO + TradingView*
-
-📍 *السهم:* `{stock['code']}` - *{stock['name']}*
-📈 *رابط الشارت:* [فتح الشارت على TradingView]({stock['tv_link']})
-💵 *السعر اللحظي:* `{stock['price']:.2f}` SAR
-
-📊 *مصفوفة المؤشرات والسلوك:*
-• **إشارة تجميع / FVG / CHOCH:** نُشط FVG
-• **مؤشر RSI14 (يومي):** `{stock['rsi']:.2f}` (تجاوز 50)
-• **خط CVD فوق الصفر:** نعم (CVD > 0)
-• **الحجم النسبي (RVOL):** `{stock['rvol']:.2f}`
-
-📍 *مستويات الدخول:*
-• **دعم لحظي:** `{stock['support']:.2f}`
-• **دعم قوي (ILZ):** `{stock['strong_support']:.2f}`
-• **تأكيد الاختراق:** `{stock['breakout']:.2f}`
-
-🎯 *الأهداف:*
-• **هدف أول:** `{stock['t1']:.2f}`
-• **هدف ثاني:** `{stock['t2']:.2f}`
-• **هدف ثالث:** `{stock['t3']:.2f}`
-• **هدف رابع:** `{stock['t4']:.2f}`
-🟢 • **قد يصل إلى:** `{stock['max_target']:.2f}`
-
-⛔️ *وقف الخسارة:*
-• **أولي:** `{stock['sl1']:.2f}` | **ثاني:** `{stock['sl2']:.2f}` | **دموي:** `{stock['sl3']:.2f}`
-━━━━━━━━━━━━━━━━━━"""
+        msg = (
+            f"<b>الرمز:</b> <code>{stock['code']}</code>\n"
+            f"<b>السعر الحالي:</b> {stock['price']:.2f} SAR\n"
+            f"<b>الاسم:</b> {stock['name']}\n"
+            f"<b>القطاع والنشاط:</b> {stock['sector']} - {stock['industry']}\n"
+            f"<b>نسبة التغيير الحالي+-٪:</b> {stock['change_pct']:+.2f}%\n"
+            f"<b>قمة 52 اسبوع +٪:</b> {stock['high_52_pct']:+.2f}%\n"
+            f"<b>قاع 52 اسبوع +٪:</b> {stock['low_52_pct']:+.2f}%\n"
+            f"<b>Power trend 4h:</b> ( {stock['power_candles']} ) شمعه\n"
+            f"<b>الشارت TradingView:</b> <a href='{stock['tv_link']}'>فتح الشارت</a>\n"
+            f"-----------------------------------"
+        )
         send_telegram(msg)
 
     print("=" * 60)
-    print(f"✅ Scan completed: {len(results)} stocks passed.")
+    print(f"✅ Scan completed: Sent {len(results)} stocks.")
     print("=" * 60)
 
 
