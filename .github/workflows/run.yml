@@ -1,35 +1,40 @@
-name: Saudi Market Scanner
+name: squeeze-bot
 
 on:
-  workflow_dispatch:
   schedule:
-    # يعمل كل 30 دقيقة من 10:00 صباحاً حتى 3:30 مساءً بتوقيت السعودية (7:00 إلى 12:30 UTC)
-    - cron: '0,30 7-12 * * 0,1,2,3,4'
-    # تشغيل أخير الساعة 16:00 تماماً بتوقيت السعودية (13:00 UTC) عند إغلاق السوق
-    - cron: '0 13 * * 0,1,2,3,4'
+    # التوقيت بالـ UTC (الرياض = UTC+3) | الأحد - الخميس
+    - cron: "20 4 * * 0-4"          # 07:20 الرياض - فحص واحد قبل الافتتاح
+    - cron: "45-55/5 6 * * 0-4"     # 09:45 - 09:55 الرياض
+    - cron: "*/5 7-11 * * 0-4"      # 10:00 - 14:55 الرياض
+    - cron: "0-20/5 12 * * 0-4"     # 15:00 - 15:20 الرياض
+  workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
-  run-bot:
+  run:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: "3.11"
 
-      - name: Install Dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install requests pandas numpy yfinance
+      - name: Install dependencies
+        run: pip install yfinance pandas numpy requests
 
-      - name: Run Market Scanner Script
+      - name: Run squeeze bot
+        run: python squeeze_bot.py
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          UPSTASH_REDIS_REST_URL: ${{ secrets.UPSTASH_REDIS_REST_URL }}
-          UPSTASH_REDIS_REST_TOKEN: ${{ secrets.UPSTASH_REDIS_REST_TOKEN }}
-        run: python main.py
+
+      - name: Save seen signals
+        run: |
+          git config user.name "squeeze-bot"
+          git config user.email "squeeze-bot@users.noreply.github.com"
+          git add seen_squeeze.json || true
+          git commit -m "update seen signals" || true
+          git push || true
