@@ -1,3 +1,4 @@
+import os
 import sys
 import time
 import pandas as pd
@@ -5,13 +6,17 @@ import yfinance as yf
 import requests
 
 # ==========================================
-# إعدادات تيليجرام (ضع بيانات بوتك هنا)
+# إعدادات تيليجرام (سحبها من متغيرات البيئة تلقائياً)
 # ==========================================
-TELEGRAM_BOT_TOKEN = "ضع_توكن_البوت_هنا"
-CHAT_ID = "ضع_معرف_المحادثة_أو_القناة_هنا"
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
 def send_telegram_message(message):
-    """دالة لإرسال الرسائل عبر تيليجرام"""
+    """دالة لإرسال الرسائل عبر تيليجرام مع التحقق من النجاح"""
+    if not TELEGRAM_BOT_TOKEN or not CHAT_ID:
+        print("خطأ: توكن تيليجرام أو معرف المحادثة غير متاح في متغيرات البيئة.")
+        return
+
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id": CHAT_ID,
@@ -20,8 +25,11 @@ def send_telegram_message(message):
     }
     try:
         response = requests.post(url, json=payload, timeout=10)
-        if response.status_code != 200:
-            print(f"فشل إرسال التنبيه لتيليجرام: {response.text}")
+        res_data = response.json()
+        if response.status_code == 200 and res_data.get("ok"):
+            print("تم إرسال التقرير إلى تيليجرام بنجاح.")
+        else:
+            print(f"فشل إرسال التنبيه لتيليجرام: {res_data}")
     except Exception as e:
         print(f"خطأ في الاتصال بتيليجرام: {e}")
 
@@ -85,11 +93,10 @@ def main():
             send_telegram_message(error_msg)
             sys.exit(1)
 
-    # إرسال النتائج عبر تيليجرام دفعة واحدة أو رسائل منفصلة
+    # إرسال النتائج عبر تيليجرام دفعة واحدة
     if signals_to_send:
         full_report = "🚀 *تقرير فحص الأسهم اليومي*\n\n" + "\n\n".join(signals_to_send)
         send_telegram_message(full_report)
-        print("تم إرسال التقرير إلى تيليجرام بنجاح.")
 
 if __name__ == "__main__":
     main()
