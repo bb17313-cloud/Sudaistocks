@@ -1,102 +1,387 @@
 import os
-import sys
+import json
 import time
+import requests
+import numpy as np
 import pandas as pd
 import yfinance as yf
-import requests
 
-# ==========================================
-# إعدادات تيليجرام (سحبها من متغيرات البيئة تلقائياً)
-# ==========================================
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+# ================= الإعدادات =================
+BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+STOCKS = {
+    "2030": "المصافي",
+    "2222": "أرامكو السعودية",
+    "2380": "بترو رابغ",
+    "2381": "الحفر العربية",
+    "2382": "اديس",
+    "4030": "البحري",
+    "1201": "تكوين",
+    "1202": "ميكو",
+    "1210": "بي سي آي",
+    "1211": "معادن",
+    "1301": "أسلاك",
+    "1304": "اليمامة للحديد",
+    "1320": "أنابيب السعودية",
+    "1321": "أنابيب الشرق",
+    "1322": "أماك",
+    "1323": "يو سي آي سي",
+    "1324": "صالح الراشد",
+    "2001": "كيمانول",
+    "2010": "سابك",
+    "2020": "سابك للمغذيات الزراعية",
+    "2060": "التصنيع",
+    "2090": "جيسكو",
+    "2150": "زجاج",
+    "2170": "اللجين",
+    "2180": "فيبكو",
+    "2200": "أنابيب",
+    "2210": "نماء للكيماويات",
+    "2220": "معدنية",
+    "2223": "لوبريف",
+    "2240": "صناعات",
+    "2250": "المجموعة السعودية",
+    "2290": "ينساب",
+    "2300": "صناعة الورق",
+    "2310": "سبكيم العالمية",
+    "2330": "المتقدمة",
+    "2350": "كيان السعودية",
+    "2360": "الفخارية",
+    "3002": "اسمنت نجران",
+    "3003": "اسمنت المدينة",
+    "3004": "اسمنت الشمالية",
+    "3005": "أسمنت أم القرى",
+    "3007": "الواحة",
+    "3008": "الكثيري",
+    "3010": "اسمنت العربية",
+    "3020": "أسمنت اليمامة",
+    "3030": "اسمنت السعودية",
+    "3040": "اسمنت القصيم",
+    "3050": "اسمنت الجنوب",
+    "3060": "أسمنت ينبع",
+    "3080": "اسمنت الشرقية",
+    "3090": "اسمنت تبوك",
+    "3091": "أسمنت الجوف",
+    "3092": "اسمنت الرياض",
+    "4143": "تالكو",
+    "1212": "استرا الصناعية",
+    "1214": "شاكر",
+    "1302": "يوان",
+    "1303": "الصناعات الكهربائية",
+    "2040": "الخزف السعودي",
+    "2110": "الكابلات السعودية",
+    "2160": "اميانتيت",
+    "2320": "البابطين",
+    "2370": "مسك",
+    "4110": "باتك",
+    "4140": "صادرات",
+    "4141": "العمران",
+    "4142": "كابلات الرياض",
+    "4144": "رووم",
+    "4145": "او جي سي",
+    "4146": "جاز",
+    "4147": "سي جي اس",
+    "4148": "الوسائل الصناعية",
+    "1831": "مهارة",
+    "1832": "صدر",
+    "1833": "الموارد",
+    "1834": "سماسكو",
+    "1835": "تمكين",
+    "4270": "طباعة وتغليف",
+    "6004": "كاتريون",
+    "2190": "سيسكو القابضة",
+    "4031": "الأرضية",
+    "4040": "سابتكو",
+    "4260": "بدجت السعودية",
+    "4261": "ذيب",
+    "4262": "لومي",
+    "4263": "سال",
+    "4264": "طيران ناس",
+    "4265": "شري",
+    "1213": "نسيج",
+    "2130": "صدق",
+    "2340": "ارتيكس",
+    "4011": "لازوردي",
+    "4012": "الأاصيل",
+    "1810": "سيرا",
+    "1820": "بان",
+    "1830": "لحام للرياضة",
+    "4090": "طيبة",
+    "4170": "شمس",
+    "4250": "جيل عمر",
+    "4290": "الخليج للتدريب",
+    "4291": "الوطنية للتعليم",
+    "4292": "عطاء",
+    "6002": "هرفي للأغذية",
+    "6012": "ريدان",
+    "6013": "التطويرية الغذائية",
+    "6014": "التمار",
+    "6015": "أمريكانا",
+    "6016": "برغرايززر",
+    "6017": "جاهز",
+    "6018": "الأندية للرياضة",
+    "6019": "المسار الشامل",
+    "6022": "أرماح",
+    "4003": "اكسترا",
+    "4008": "ساكو",
+    "4050": "ساسكو",
+    "4051": "باعظيم",
+    "4180": "مجموعة فتيحي",
+    "4190": "جرير",
+    "4191": "أبو معطي",
+    "4192": "السيف غاليري",
+    "4193": "نايس ون",
+    "4194": "محطة البناء",
+    "4200": "الدريس",
+    "4240": "سينومي ريتيل",
+    "4001": "أسواق العثيم",
+    "4006": "اسواق المزرعة",
+    "4061": "انعام القابضة",
+    "4160": "ثمار",
+    "4161": "بن داود",
+    "4162": "المنجم",
+    "4163": "الدواء",
+    "4164": "النهدي",
+    "2050": "مجموعة صافولا",
+    "2100": "وفرة",
+    "2140": "ايان",
+    "2270": "سدافكو",
+    "2280": "المراعي",
+    "2281": "تنمية",
+    "2282": "نقى",
+    "2283": "المطاحن الأولى",
+    "2284": "المطاحن الحديثة",
+    "2285": "المطاحن العربية",
+    "2286": "المطاحن الرابعة",
+    "2287": "انتاج",
+    "2288": "نفوذ",
+    "4080": "سناد القابضة",
+    "6001": "حلواني اخوان",
+    "6010": "نادك",
+    "6020": "جلكو",
+    "6040": "تبوك الزراعية",
+    "6050": "الأسماك",
+    "6060": "الشرقية سمنة",
+    "6070": "الجوف",
+    "6090": "جازادكو",
+    "4165": "الماجد للعود",
+    "2230": "الكيميائية",
+    "4002": "المواساة",
+    "4004": "دله الصحية",
+    "4005": "رعاية",
+    "4007": "الحمادي",
+    "4009": "السعودي الألماني الصحية",
+    "4013": "سليمان الحبيب",
+    "4014": "دار المعدات",
+    "4017": "فقيه الطبية",
+    "4018": "الموسى",
+    "4019": "اس ام علي للرعاية الصحية",
+    "4021": "المركز الكندي الطبي",
+    "2070": "الدوائية",
+    "4015": "جمجوم فارما",
+    "4016": "أفالون فارما",
+    "1010": "الرياض",
+    "1020": "الجزيرة",
+    "1030": "الاستثمار",
+    "1050": "بي اس اف",
+    "1060": "الأول",
+    "1080": "العربي",
+    "1120": "الراجحي",
+    "1140": "البلاد",
+    "1150": "الإنماء",
+    "1180": "الأهلي",
+    "1111": "مجموعة تداول",
+    "1182": "أملاك",
+    "1183": "سهل",
+    "2120": "متطورة",
+    "4081": "النايفات",
+    "4082": "مرنة",
+    "4083": "تسهيل",
+    "4084": "دراية",
+    "4130": "درب السعودية",
+    "4280": "المملكة",
+    "7200": "ام أي اس",
+    "7201": "بحر العرب",
+    "7202": "سلوشنز",
+    "7203": "علم",
+    "7204": "تويي",
+    "7205": "دي بي اس",
+    "7211": "عزم",
+    "7010": "اس تي سي",
+    "7020": "اتحاد اتصالات",
+    "7030": "زين السعودية",
+    "7040": "قو للاتصالات",
+    "2080": "الغاز القابضة",
+    "2081": "الخريف",
+    "2082": "أكوا",
+    "2083": "مرافق",
+    "2084": "مباهنا",
+    "5110": "السعودية للطاقة",
+    "4330": "الرياض ريت",
+    "4331": "الجزيرة ريت",
+    "4332": "جدوى ريت الحرمين",
+    "4333": "تعليم ريت",
+    "4334": "المعذر ريت",
+    "4335": "مشاركة ريت",
+    "4337": "العزيزية ريت",
+    "4338": "الأهلي ريت 1",
+    "4339": "دراية ريت",
+    "4340": "الراجحي ريت",
+    "4342": "جدوى ريت السعودية",
+    "4344": "سدكو كابيتال ريت",
+    "4345": "الإنماء ريت للتجزئة"
+}
 
-def send_telegram_message(message):
-    """دالة لإرسال الرسائل عبر تيليجرام مع التحقق من النجاح"""
-    if not TELEGRAM_BOT_TOKEN or not CHAT_ID:
-        print("خطأ: توكن تيليجرام أو معرف المحادثة غير متاح في متغيرات البيئة.")
-        return
+TICKERS = os.getenv("TICKERS", "").split(",") if os.getenv("TICKERS") else [f"{c}.SR" for c in STOCKS]
+INTERVALS = {"1d": "1y", "15m": "30d"}
 
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": CHAT_ID,
-        "text": message,
-        "parse_mode": "Markdown"
-    }
-    try:
-        response = requests.post(url, json=payload, timeout=10)
-        res_data = response.json()
-        if response.status_code == 200 and res_data.get("ok"):
-            print("تم إرسال التقرير إلى تيليجرام بنجاح.")
-        else:
-            print(f"فشل إرسال التنبيه لتيليجرام: {res_data}")
-    except Exception as e:
-        print(f"خطأ في الاتصال بتيليجرام: {e}")
+LENGTH   = 20
+BB_MULT  = 2.0
+KC_HIGH, KC_MID, KC_LOW = 1.0, 1.5, 2.0
 
-# ==========================================
-# إعدادات الأسهم وقائمة المتابعة
-# ==========================================
-TICKERS = [
-    '2210.SR',  # نما للكيماويات
-    '2030.SR',  # مثال لسهم آخر
-]
-
-PERIOD = "30d"        
-MAX_RETRIES = 5       
-RETRY_DELAY = 6       
+RETURN_LOOKBACK = 3      
+TREND_FAST, TREND_SLOW = 34, 50   
+SMALL_MOM_PCT   = 1.5    
+YELLOW_MIN_BARS = 2      
+SEEN_FILE = "seen_squeeze.json"
+MAX_RETRIES = 3
+RETRY_DELAY = 4
+# ============================================
 
 
-def fetch_stock_data_strict(ticker, period=PERIOD, max_retries=MAX_RETRIES, delay=RETRY_DELAY):
-    """دالة صارمة لجلب بيانات السهم مع محاولات متعددة لمنع التخطي"""
-    for attempt in range(1, max_retries + 1):
+def linreg_last(series: pd.Series, n: int) -> pd.Series:
+    x = np.arange(n)
+    out = np.full(len(series), np.nan)
+    v = series.values
+    for i in range(n - 1, len(v)):
+        y = v[i - n + 1:i + 1]
+        if np.isnan(y).any():
+            continue
+        slope, intercept = np.polyfit(x, y, 1)
+        out[i] = intercept + slope * (n - 1)
+    return pd.Series(out, index=series.index)
+
+
+def fetch_stock_data_strict(ticker, period, interval):
+    """دالة لجلب البيانات مع إعادة المحاولة لضمان عدم تخطي أي سهم بشكل صامت"""
+    for attempt in range(1, MAX_RETRIES + 1):
         try:
-            print(f"[{ticker}] جاري محاولة الجلب (محاولة {attempt}/{max_retries})...")
-            data = yf.download(ticker, period=period, progress=False, timeout=15)
-            
-            if isinstance(data.columns, pd.MultiIndex):
-                data.columns = data.columns.get_level_values(0)
-                
-            if data is not None and not data.empty and 'Close' in data.columns:
-                print(f"[{ticker}] تم بنجاح جلب البيانات وصحتها.")
-                return data
-            else:
-                print(f"[{ticker}] تنبيه: البيانات المُسترجعة فارغة.")
-                
+            df = yf.download(ticker, period=period, interval=interval, progress=False, auto_adjust=False, timeout=15)
+            if df is not None and not df.empty:
+                return df
         except Exception as e:
-            print(f"[{ticker}] خطأ في الاتصال (محاولة {attempt}): {e}")
-        
-        if attempt < max_retries:
-            time.sleep(delay)
-            
-    raise RuntimeError(f"فشل ذريع: تعذر نهائياً جلب بيانات السهم الأساسي ({ticker}).")
+            print(f"محاولة {attempt} فشلت للسهم {ticker}: {e}")
+        if attempt < MAX_RETRIES:
+            time.sleep(RETRY_DELAY)
+    return pd.DataFrame()
+
+
+def compute(df: pd.DataFrame) -> pd.DataFrame:
+    c, h, l = df["Close"], df["High"], df["Low"]
+    n = LENGTH
+
+    basis = c.rolling(n).mean()
+    dev = BB_MULT * c.rolling(n).std(ddof=0)
+    bb_up, bb_lo = basis + dev, basis - dev
+
+    tr = pd.concat([h - l, (h - c.shift()).abs(), (l - c.shift()).abs()], axis=1).max(axis=1)
+    dev_kc = tr.rolling(n).mean()
+    kc = lambda m: (basis + dev_kc * m, basis - dev_kc * m)
+    kc_up_h, kc_lo_h = kc(KC_HIGH)
+    kc_up_m, kc_lo_m = kc(KC_MID)
+    kc_up_l, kc_lo_l = kc(KC_LOW)
+
+    no_sqz   = (bb_lo < kc_lo_l) | (bb_up > kc_up_l)
+    low_sqz  = (bb_lo >= kc_lo_l) | (bb_up <= kc_up_l)
+    mid_sqz  = (bb_lo >= kc_lo_m) | (bb_up <= kc_up_m)
+    high_sqz = (bb_lo >= kc_lo_h) | (bb_up <= kc_up_h)
+
+    dot = np.where(high_sqz, "orange",
+          np.where(mid_sqz, "red",
+          np.where(low_sqz, "black", "green")))
+
+    mid = ((h.rolling(n).max() + l.rolling(n).min()) / 2 + c.rolling(n).mean()) / 2
+    mom = linreg_last(c - mid, n)
+    prev = mom.shift()
+
+    mom_color = np.where(mom > 0,
+                         np.where(mom > prev, "aqua", "blue"),
+                         np.where(mom < prev, "red", "yellow"))
+
+    cloud_top = pd.concat([c.ewm(span=TREND_FAST, adjust=False).mean(),
+                           c.ewm(span=TREND_SLOW, adjust=False).mean()], axis=1).max(axis=1)
+
+    return pd.DataFrame({"close": c, "mom": mom, "dot": dot, "mom_color": mom_color, "cloud_top": cloud_top})
+
+
+def check_signals(r: pd.DataFrame):
+    sigs = []
+    if len(r) < LENGTH + 10:
+        return sigs
+    last = r.iloc[-1]
+    if last["close"] <= last["cloud_top"]:   
+        return sigs
+    recent = r.iloc[-1 - RETURN_LOOKBACK:-1]
+    was_green = (recent["dot"] == "green").any()   
+
+    small = abs(last["mom"]) / last["close"] * 100 <= SMALL_MOM_PCT
+    if (last["dot"] == "black" and was_green and last["mom"] > 0
+            and last["mom"] > r["mom"].iloc[-2] and small):
+        sigs.append("🔵 تجميع: السكويز رجع ينضغط (نقاط سوداء) + زخم صغير موجب ويرتفع")
+
+    tail = r["mom_color"].iloc[-1 - YELLOW_MIN_BARS:]
+    yellow_recent = (r["mom_color"].iloc[-1 - RETURN_LOOKBACK:] == "yellow").sum() >= YELLOW_MIN_BARS
+    if (last["dot"] in ("black", "orange") and was_green and yellow_recent
+            and last["mom"] <= 0):
+        sigs.append(f"🟡 نهاية هبوط: أعمدة صفراء تتناقص + انضغاط جديد ({'⚫' if last['dot']=='black' else '🟠'})")
+    return sigs
+
+
+def drop_incomplete(df: pd.DataFrame, interval: str) -> pd.DataFrame:
+    now = pd.Timestamp.now(tz="Asia/Riyadh")
+    last = df.index[-1]
+    last = last.tz_localize("Asia/Riyadh") if last.tzinfo is None else last.tz_convert("Asia/Riyadh")
+    if interval == "1d":
+        incomplete = last.date() == now.date() and (now.hour * 60 + now.minute) < 15 * 60 + 20
+    else:
+        incomplete = last + pd.Timedelta(minutes=int(interval.replace("m", ""))) > now
+    return df.iloc[:-1] if incomplete else df
+
+
+def send(msg: str):
+    if not BOT_TOKEN or not CHAT_ID:
+        print(msg); return
+    requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                  data={"chat_id": CHAT_ID, "text": msg, "parse_mode": "HTML", "disable_web_page_preview": True}, timeout=20)
 
 
 def main():
-    print("بدء تشغيل سكربت الفحص والإرسال...")
-    
-    signals_to_send = []
-    
-    for ticker in TICKERS:
-        try:
-            df = fetch_stock_data_strict(ticker)
-            last_close = df['Close'].iloc[-1]
-            
-            # صياغة رسالة السهم
-            msg = f"📈 *تحديث السهم:* `{ticker}`\n💰 *السعر الحالي:* `{last_close:.2f}`"
-            signals_to_send.append(msg)
-            
-            time.sleep(2)
-            
-        except Exception as err:
-            error_msg = f"❌ *خطأ حرج في السهم {ticker}:* {err}"
-            print(error_msg)
-            send_telegram_message(error_msg)
-            sys.exit(1)
+    seen = json.load(open(SEEN_FILE)) if os.path.exists(SEEN_FILE) else {}
+    for INTERVAL, PERIOD in INTERVALS.items():
+        for t in [x.strip() for x in TICKERS if x.strip()]:
+            try:
+                df = fetch_stock_data_strict(t, PERIOD, INTERVAL)
+                if df.empty:
+                    continue
+                if isinstance(df.columns, pd.MultiIndex):
+                    df.columns = df.columns.get_level_values(0)
+                df = drop_incomplete(df.dropna(), INTERVAL)
+                if df.empty:
+                    continue
+                r = compute(df)
+                bar_id = str(r.index[-1])
+                for s in check_signals(r):
+                    key = f"{t}|{INTERVAL}|{s[:2]}"
+                    if seen.get(key) == bar_id:
+                        continue
+                    seen[key] = bar_id
+                    code = t.replace('.SR', '')
+                    tv_link = f"https://www.tradingview.com/chart/?symbol=TADAWUL:{code}"
+                    send(f"{s}\n📈 {t} {STOCKS.get(code, '')}\n💰 {r['close'].iloc[-1]:.2f}\n⏱ {INTERVAL} | {bar_id[:16]}\n<a href='{tv_link}'>📊 TradingView</a>")
+            except Exception as e:
+                print(t, "error:", e)
+    json.dump(seen, open(SEEN_FILE, "w"))
 
-    # إرسال النتائج عبر تيليجرام دفعة واحدة
-    if signals_to_send:
-        full_report = "🚀 *تقرير فحص الأسهم اليومي*\n\n" + "\n\n".join(signals_to_send)
-        send_telegram_message(full_report)
 
 if __name__ == "__main__":
     main()
