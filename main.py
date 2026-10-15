@@ -230,8 +230,8 @@ STOCKS = {
 }
 # الرموز بصيغة Yahoo؛ يمكن تجاوزها بمتغير البيئة TICKERS
 TICKERS = os.getenv("TICKERS", "").split(",") if os.getenv("TICKERS") else [f"{c}.SR" for c in STOCKS]
-INTERVAL = os.getenv("INTERVAL", "1d")      # 1d / 1h / 15m
-PERIOD   = os.getenv("PERIOD", "1y")
+# الفريمات: يومي + 15 دقيقة (Yahoo يعطي 15m لآخر 60 يوم فقط)
+INTERVALS = {"1d": "1y", "15m": "30d"}
 
 LENGTH   = 20
 BB_MULT  = 2.0
@@ -331,24 +331,27 @@ def send(msg: str):
 
 def main():
     seen = json.load(open(SEEN_FILE)) if os.path.exists(SEEN_FILE) else {}
-    for t in [x.strip() for x in TICKERS if x.strip()]:
-        try:
-            df = yf.download(t, period=PERIOD, interval=INTERVAL, progress=False, auto_adjust=False)
-            if df.empty:
-                continue
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.get_level_values(0)
-            df = df.dropna()
-            r = compute(df)
-            bar_id = str(r.index[-1])
-            for s in check_signals(r):
-                key = f"{t}|{s[:2]}"
-                if seen.get(key) == bar_id:
+    for INTERVAL, PERIOD in INTERVALS.items():
+        for t in [x.strip() for x in TICKERS if x.strip()]:
+            try:
+                df = yf.download(t, period=PERIOD, interval=INTERVAL, progress=False, auto_adjust=False)
+                if df.empty:
                     continue
-                seen[key] = bar_id
-                send(f"{s}\n📈 {t} {STOCKS.get(t.replace('.SR', ''), '')}\n💰 {r['close'].iloc[-1]:.2f}\n⏱ {INTERVAL} | {bar_id[:16]}")
-        except Exception as e:
-            print(t, "error:", e)
+                if isinstance(df.columns, pd.MultiIndex):
+                    df.columns = df.columns.get_level_values(0)
+                df = df.dropna()
+                r = compute(df)
+                bar_id = str(r.index[-1])
+                for s in check_signals(r):
+                    key = f"{t}|{INTERVAL}|{s[:2]}"
+                    if seen.get(key) == bar_id:
+                        continue
+                    seen[key] = bar_id
+                    code = t.replace('.SR', '')
+                    tv_link = f"https://www.tradingview.com/chart/?symbol=TADAWUL:{code}"
+                    send(f"{s}\n📈 {t} {STOCKS.get(code, '')}\n💰 {r['close'].iloc[-1]:.2f}\n⏱ {INTERVAL} | {bar_id[:16]}\n🔗 {tv_link}")
+            except Exception as e:
+                print(t, "error:", e)
     json.dump(seen, open(SEEN_FILE, "w"))
 
 
