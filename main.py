@@ -238,6 +238,7 @@ BB_MULT  = 2.0
 KC_HIGH, KC_MID, KC_LOW = 1.0, 1.5, 2.0
 
 RETURN_LOOKBACK = 3      # كم شمعة للخلف نبحث فيها عن نقطة خضراء قبل الانضغاط
+TREND_FAST, TREND_SLOW = 34, 50   # سحابة EMA 34/50: السعر لازم يكون فوق حافتها العليا
 SMALL_MOM_PCT   = 1.5    # الزخم "صغير" إذا كان أقل من هذه النسبة % من السعر
 YELLOW_MIN_BARS = 2      # أقل عدد أعمدة صفراء متتالية
 SEEN_FILE = "seen_squeeze.json"
@@ -296,7 +297,10 @@ def compute(df: pd.DataFrame) -> pd.DataFrame:
                          np.where(mom > prev, "aqua", "blue"),
                          np.where(mom < prev, "red", "yellow"))
 
-    return pd.DataFrame({"close": c, "mom": mom, "dot": dot, "mom_color": mom_color})
+    cloud_top = pd.concat([c.ewm(span=TREND_FAST, adjust=False).mean(),
+                           c.ewm(span=TREND_SLOW, adjust=False).mean()], axis=1).max(axis=1)
+
+    return pd.DataFrame({"close": c, "mom": mom, "dot": dot, "mom_color": mom_color, "cloud_top": cloud_top})
 
 
 def check_signals(r: pd.DataFrame):
@@ -304,6 +308,8 @@ def check_signals(r: pd.DataFrame):
     if len(r) < LENGTH + 10:
         return sigs
     last = r.iloc[-1]
+    if last["close"] <= last["cloud_top"]:   # فلتر الاتجاه: السعر تحت/داخل السحابة
+        return sigs
     recent = r.iloc[-1 - RETURN_LOOKBACK:-1]
     was_green = (recent["dot"] == "green").any()   # كان في وضع "لا سكويز" ثم رجع انضغط
 
@@ -322,11 +328,23 @@ def check_signals(r: pd.DataFrame):
     return sigs
 
 
+def drop_incomplete(df: pd.DataFrame, interval: str) -> pd.DataFrame:
+    """يحذف آخر شمعة إذا لم تكتمل بعد (توقيت الرياض)"""
+    now = pd.Timestamp.now(tz="Asia/Riyadh")
+    last = df.index[-1]
+    last = last.tz_localize("Asia/Riyadh") if last.tzinfo is None else last.tz_convert("Asia/Riyadh")
+    if interval == "1d":
+        incomplete = last.date() == now.date() and (now.hour * 60 + now.minute) < 15 * 60 + 20
+    else:
+        incomplete = last + pd.Timedelta(minutes=int(interval.replace("m", ""))) > now
+    return df.iloc[:-1] if incomplete else df
+
+
 def send(msg: str):
     if not BOT_TOKEN or not CHAT_ID:
         print(msg); return
     requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-                  data={"chat_id": CHAT_ID, "text": msg}, timeout=20)
+                  data={"chat_id": CHAT_ID, "text": msg, "parse_mode": "HTML", "disable_web_page_preview": True}, timeout=20)
 
 
 def main():
@@ -339,7 +357,7 @@ def main():
                     continue
                 if isinstance(df.columns, pd.MultiIndex):
                     df.columns = df.columns.get_level_values(0)
-                df = df.dropna()
+                df = drop_incomplete(df.dropna(), INTERVAL)
                 r = compute(df)
                 bar_id = str(r.index[-1])
                 for s in check_signals(r):
@@ -349,7 +367,7 @@ def main():
                     seen[key] = bar_id
                     code = t.replace('.SR', '')
                     tv_link = f"https://www.tradingview.com/chart/?symbol=TADAWUL:{code}"
-                    send(f"{s}\n📈 {t} {STOCKS.get(code, '')}\n💰 {r['close'].iloc[-1]:.2f}\n⏱ {INTERVAL} | {bar_id[:16]}\n🔗 {tv_link}")
+                    send(f"{s}\n📈 {t} {STOCKS.get(code, '')}\n💰 {r['close'].iloc[-1]:.2f}\n⏱ {INTERVAL} | {bar_id[:16]}\n<a href='{tv_link}'>📊 TradingView</a>")
             except Exception as e:
                 print(t, "error:", e)
     json.dump(seen, open(SEEN_FILE, "w"))
