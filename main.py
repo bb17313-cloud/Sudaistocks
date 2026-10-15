@@ -228,25 +228,23 @@ STOCKS = {
     "4344": "سدكو كابيتال ريت",
     "4345": "الإنماء ريت للتجزئة"
 }
-# الرموز بصيغة Yahoo؛ يمكن تجاوزها بمتغير البيئة TICKERS
+
 TICKERS = os.getenv("TICKERS", "").split(",") if os.getenv("TICKERS") else [f"{c}.SR" for c in STOCKS]
-# الفريمات: يومي + 15 دقيقة (Yahoo يعطي 15m لآخر 60 يوم فقط)
 INTERVALS = {"1d": "1y", "15m": "30d"}
 
 LENGTH   = 20
 BB_MULT  = 2.0
 KC_HIGH, KC_MID, KC_LOW = 1.0, 1.5, 2.0
 
-RETURN_LOOKBACK = 3      # كم شمعة للخلف نبحث فيها عن نقطة خضراء قبل الانضغاط
-TREND_FAST, TREND_SLOW = 34, 50   # سحابة EMA 34/50: السعر لازم يكون فوق حافتها العليا
-SMALL_MOM_PCT   = 1.5    # الزخم "صغير" إذا كان أقل من هذه النسبة % من السعر
-YELLOW_MIN_BARS = 2      # أقل عدد أعمدة صفراء متتالية
+RETURN_LOOKBACK = 3
+TREND_FAST, TREND_SLOW = 34, 50
+SMALL_MOM_PCT   = 1.5
+YELLOW_MIN_BARS = 2
 SEEN_FILE = "seen_squeeze.json"
 # ============================================
 
 
 def linreg_last(series: pd.Series, n: int) -> pd.Series:
-    """ta.linreg(src, n, 0): قيمة خط الانحدار عند آخر شمعة في النافذة"""
     x = np.arange(n)
     out = np.full(len(series), np.nan)
     v = series.values
@@ -263,12 +261,10 @@ def compute(df: pd.DataFrame) -> pd.DataFrame:
     c, h, l = df["Close"], df["High"], df["Low"]
     n = LENGTH
 
-    # Bollinger (stdev بنفس طريقة Pine: ddof=0)
     basis = c.rolling(n).mean()
     dev = BB_MULT * c.rolling(n).std(ddof=0)
     bb_up, bb_lo = basis + dev, basis - dev
 
-    # Keltner (ATR بسيط = SMA of TR)
     tr = pd.concat([h - l, (h - c.shift()).abs(), (l - c.shift()).abs()], axis=1).max(axis=1)
     dev_kc = tr.rolling(n).mean()
     kc = lambda m: (basis + dev_kc * m, basis - dev_kc * m)
@@ -276,23 +272,19 @@ def compute(df: pd.DataFrame) -> pd.DataFrame:
     kc_up_m, kc_lo_m = kc(KC_MID)
     kc_up_l, kc_lo_l = kc(KC_LOW)
 
-    # نفس شروط المؤشر حرفياً (مع or)
     no_sqz   = (bb_lo < kc_lo_l) | (bb_up > kc_up_l)
-    low_sqz  = (bb_lo >= kc_lo_l) | (bb_up <= kc_up_l)
+    low_sqz  = (bb_lo >= kc_lo_l) | (bb_up <= kc_lo_l)
     mid_sqz  = (bb_lo >= kc_lo_m) | (bb_up <= kc_up_m)
     high_sqz = (bb_lo >= kc_lo_h) | (bb_up <= kc_up_h)
 
-    # لون النقطة بنفس أولوية المؤشر
     dot = np.where(high_sqz, "orange",
           np.where(mid_sqz, "red",
           np.where(low_sqz, "black", "green")))
 
-    # الزخم
     mid = ((h.rolling(n).max() + l.rolling(n).min()) / 2 + c.rolling(n).mean()) / 2
     mom = linreg_last(c - mid, n)
     prev = mom.shift()
 
-    # لون العمود بنفس منطق المؤشر
     mom_color = np.where(mom > 0,
                          np.where(mom > prev, "aqua", "blue"),
                          np.where(mom < prev, "red", "yellow"))
@@ -308,18 +300,16 @@ def check_signals(r: pd.DataFrame):
     if len(r) < LENGTH + 10:
         return sigs
     last = r.iloc[-1]
-    if last["close"] <= last["cloud_top"]:   # فلتر الاتجاه: السعر تحت/داخل السحابة
+    if last["close"] <= last["cloud_top"]:
         return sigs
     recent = r.iloc[-1 - RETURN_LOOKBACK:-1]
-    was_green = (recent["dot"] == "green").any()   # كان في وضع "لا سكويز" ثم رجع انضغط
+    was_green = (recent["dot"] == "green").any()
 
-    # --- الحالة 1: نقاط سوداء + زخم موجب صغير ويرتفع (تجميع) ---
     small = abs(last["mom"]) / last["close"] * 100 <= SMALL_MOM_PCT
     if (last["dot"] == "black" and was_green and last["mom"] > 0
             and last["mom"] > r["mom"].iloc[-2] and small):
         sigs.append("🔵 تجميع: السكويز رجع ينضغط (نقاط سوداء) + زخم صغير موجب ويرتفع")
 
-    # --- الحالة 2: أعمدة صفراء تتناقص ثم رجع الانضغاط (أسود/برتقالي) ---
     tail = r["mom_color"].iloc[-1 - YELLOW_MIN_BARS:]
     yellow_recent = (r["mom_color"].iloc[-1 - RETURN_LOOKBACK:] == "yellow").sum() >= YELLOW_MIN_BARS
     if (last["dot"] in ("black", "orange") and was_green and yellow_recent
@@ -329,7 +319,6 @@ def check_signals(r: pd.DataFrame):
 
 
 def drop_incomplete(df: pd.DataFrame, interval: str) -> pd.DataFrame:
-    """يحذف آخر شمعة إذا لم تكتمل بعد (توقيت الرياض)"""
     now = pd.Timestamp.now(tz="Asia/Riyadh")
     last = df.index[-1]
     last = last.tz_localize("Asia/Riyadh") if last.tzinfo is None else last.tz_convert("Asia/Riyadh")
@@ -343,8 +332,11 @@ def drop_incomplete(df: pd.DataFrame, interval: str) -> pd.DataFrame:
 def send(msg: str):
     if not BOT_TOKEN or not CHAT_ID:
         print(msg); return
-    requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-                  data={"chat_id": CHAT_ID, "text": msg, "parse_mode": "HTML", "disable_web_page_preview": True}, timeout=20)
+    try:
+        requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                      data={"chat_id": CHAT_ID, "text": msg, "parse_mode": "HTML", "disable_web_page_preview": True}, timeout=20)
+    except Exception as e:
+        print("Telegram error:", e)
 
 
 def main():
@@ -353,11 +345,23 @@ def main():
         for t in [x.strip() for x in TICKERS if x.strip()]:
             try:
                 df = yf.download(t, period=PERIOD, interval=INTERVAL, progress=False, auto_adjust=False)
-                if df.empty:
+                if df is None or df.empty:
                     continue
                 if isinstance(df.columns, pd.MultiIndex):
                     df.columns = df.columns.get_level_values(0)
-                df = drop_incomplete(df.dropna(), INTERVAL)
+                
+                # التأكد من وجود الأعمدة المطلوبة
+                if not all(col in df.columns for col in ["Close", "High", "Low"]):
+                    continue
+                
+                df = df.dropna()
+                if len(df) < LENGTH + 10:
+                    continue
+                    
+                df = drop_incomplete(df, INTERVAL)
+                if df.empty:
+                    continue
+                    
                 r = compute(df)
                 bar_id = str(r.index[-1])
                 for s in check_signals(r):
@@ -369,8 +373,13 @@ def main():
                     tv_link = f"https://www.tradingview.com/chart/?symbol=TADAWUL:{code}"
                     send(f"{s}\n📈 {t} {STOCKS.get(code, '')}\n💰 {r['close'].iloc[-1]:.2f}\n⏱ {INTERVAL} | {bar_id[:16]}\n<a href='{tv_link}'>📊 TradingView</a>")
             except Exception as e:
-                print(t, "error:", e)
-    json.dump(seen, open(SEEN_FILE, "w"))
+                # تجاوز أي خطأ متعلق بسهم محدد أو بيانات غير متوفرة واستكمال الفحص
+                continue
+                
+    try:
+        json.dump(seen, open(SEEN_FILE, "w"))
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":
